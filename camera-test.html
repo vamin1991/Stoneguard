@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Camera Permission Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f0f4ff; font-family: -apple-system, sans-serif; padding: 20px; }
+    h1 { font-size: 18px; color: #4f46e5; margin-bottom: 16px; }
+    #video { width: 100%; max-width: 400px; border-radius: 12px; background: #000; display: block; margin: 16px 0; }
+    button { padding: 14px 24px; border-radius: 12px; background: #4f46e5; color: #fff; border: none; font-size: 15px; font-weight: 700; cursor: pointer; }
+    #status { margin-top: 16px; padding: 12px; border-radius: 10px; font-size: 14px; line-height: 1.6; }
+    .success { background: #dcfce7; color: #15803d; }
+    .error { background: #fee2e2; color: #b91c1c; }
+    .info { background: #eef2ff; color: #4f46e5; }
+  </style>
+</head>
+<body>
+  <h1>📷 StoneIQ Camera Permission Test</h1>
+  <p style="font-size:13px;color:#666;margin-bottom:16px;">This tests if your phone browser allows camera access for barcode scanning.</p>
+
+  <button onclick="testCamera()">Test Camera Access</button>
+  <video id="video" autoplay playsinline style="display:none;"></video>
+  <div id="status" class="info">Tap the button to test camera access.</div>
+
+  <script>
+    async function testCamera() {
+      const status = document.getElementById('status');
+      const video = document.getElementById('video');
+      status.className = 'info';
+      status.innerText = 'Requesting camera access...';
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' } // back camera
+        });
+        video.srcObject = stream;
+        video.style.display = 'block';
+        status.className = 'success';
+        status.innerText = '✅ Camera access granted! Back camera is working. You can now build barcode scanning.';
+      } catch (err) {
+        status.className = 'error';
+        status.innerText = '❌ Camera access failed: ' + err.message + '\\n\\nThis usually means: 1) Permission denied, or 2) Not using HTTPS (camera requires secure connection).';
+      }
+    }
+  </script>
+</body>
+</html>
