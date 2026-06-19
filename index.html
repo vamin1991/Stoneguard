@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -212,6 +213,23 @@ Return ONLY the JSON object, nothing else.`
         const product = data.products?.[0];
         if (product?.image_front_url) return product.image_front_url;
         if (product?.image_url) return product.image_url;
+        return null;
+      } catch(e) {
+        return null;
+      }
+    }
+
+    async function lookupBarcode(barcode) {
+      try {
+        const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
+        const data = await res.json();
+        if (data.status === 1 && data.product) {
+          const p = data.product;
+          return {
+            name: [p.brands, p.product_name].filter(Boolean).join(' ').trim() || p.product_name || null,
+            image: p.image_front_url || p.image_url || null,
+          };
+        }
         return null;
       } catch(e) {
         return null;
@@ -607,6 +625,59 @@ Return ONLY the JSON object, nothing else.`
       );
     }
 
+    function BarcodeScanner({ onScan, onCancel }) {
+      const [scanning, setScanning] = React.useState(true);
+      const [scanError, setScanError] = React.useState(null);
+      const scannerRef = React.useRef(null);
+      const containerId = "barcode-reader";
+
+      React.useEffect(() => {
+        const html5QrCode = new Html5Qrcode(containerId);
+        scannerRef.current = html5QrCode;
+
+        html5QrCode.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 150 }, formatsToSupport: [
+              Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+              Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+              Html5QrcodeSupportedFormats.CODE_128
+            ]
+          },
+          (decodedText) => {
+            html5QrCode.stop().then(() => { onScan(decodedText); }).catch(() => onScan(decodedText));
+          },
+          () => { /* ignore per-frame scan failures */ }
+        ).catch(err => {
+          setScanError("Could not start camera: " + err);
+        });
+
+        return () => {
+          if (scannerRef.current) {
+            scannerRef.current.stop().catch(() => {});
+          }
+        };
+      }, []);
+
+      return (
+        <div style={{ padding:'20px 16px', paddingBottom:100, animation:'fadeIn 0.3s ease' }}>
+          <div style={{ background:'#000', borderRadius:16, overflow:'hidden', position:'relative' }}>
+            <div id={containerId} style={{ width:'100%' }} />
+          </div>
+          <p style={{ textAlign:'center', fontSize:13, color:'#888', marginTop:16, lineHeight:1.6 }}>
+            Point your camera at a product barcode.<br />It will scan automatically.
+          </p>
+          {scanError && (
+            <div style={{ marginTop:16, padding:16, borderRadius:14, background:'#fff1f2', border:'1px solid #fecdd3', color:'#e11d48', fontSize:13 }}>
+              {scanError}
+            </div>
+          )}
+          <button onClick={onCancel} style={{ width:'100%', marginTop:16, padding:'14px', borderRadius:14, background:'#fff', border:'1.5px solid #e0e7ff', color:'#4f46e5', fontSize:14, fontWeight:700, cursor:'pointer' }}>
+            Cancel
+          </button>
+        </div>
+      );
+    }
+
     function App() {
       const [tab, setTab] = useState('search');
       const [input, setInput] = useState('');
@@ -671,6 +742,46 @@ Return ONLY the JSON object, nothing else.`
             return updated;
           });
         } catch(e) {}
+      }
+
+      async function handleBarcodeScan(barcode) {
+        setTab('search');
+        setLoading(true); setError(null); setResult(null); setProductImage(null);
+        try {
+          const lookup = await lookupBarcode(barcode);
+          if (!lookup || !lookup.name) {
+            setError(`No product found for barcode ${barcode}. Try Search or Upload instead.`);
+            setLoading(false);
+            return;
+          }
+          if (lookup.image) setProductImage(lookup.image);
+          await loadDB();
+          const dbMatch = searchDB(lookup.name);
+          if (dbMatch) {
+            const res = dbToResult(dbMatch);
+            setResult(res);
+            saveHistory(res);
+            saveScan(lookup.name, res);
+            if (!lookup.image) fetchProductImage(res.productName).then(img => setProductImage(img));
+            setAltImages({}); setRecImages({});
+            if (res.safeAlternatives?.length) fetchCardImages(res.safeAlternatives, 'name', setAltImages);
+            if (res.recommendations?.length) fetchCardImages(res.recommendations, 'product', setRecImages);
+            setLoading(false);
+            return;
+          }
+          const res = await callClaude([{ role:'user', content:'Analyze for kidney stone patients: ' + lookup.name }]);
+          setResult(res);
+          saveHistory(res);
+          saveScan(lookup.name, res);
+          if (!lookup.image) {
+            if (res._productImageUrl) setProductImage(res._productImageUrl);
+            else fetchProductImage(res.productName).then(img => setProductImage(img));
+          }
+          setAltImages({}); setRecImages({});
+          if (res.safeAlternatives?.length) fetchCardImages(res.safeAlternatives, 'name', setAltImages);
+          if (res.recommendations?.length) fetchCardImages(res.recommendations, 'product', setRecImages);
+        } catch(e) { setError(e.message); }
+        setLoading(false);
       }
 
       async function analyzeText(q) {
@@ -786,13 +897,11 @@ Return ONLY the JSON object, nothing else.`
           {tab === 'history' && <HistoryScreen searchHistory={searchHistory} />}
 
           {/* Barcode tab */}
-          {tab === 'barcode' && !result && (
-            <div style={{ padding:'24px 16px', paddingBottom:100, animation:'fadeIn 0.3s ease' }}>
-              <div style={{ border:'2px dashed #c7d2fe', borderRadius:16, padding:'48px 20px', textAlign:'center', background:'#fff' }}>
-                <div style={{ fontSize:40, marginBottom:12 }}>📦</div>
-                <p style={{ color:'#aaa', fontSize:13, lineHeight:1.7 }}>Barcode scanning coming in v2.<br />Use <strong style={{ color:'#4f46e5' }}>Search</strong> or <strong style={{ color:'#4f46e5' }}>Upload</strong> for now.</p>
-              </div>
-            </div>
+          {tab === 'barcode' && (
+            <BarcodeScanner
+              onScan={(code) => handleBarcodeScan(code)}
+              onCancel={() => setTab('search')}
+            />
           )}
 
           {/* Search & Upload tabs */}
